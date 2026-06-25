@@ -469,12 +469,12 @@ function CardDetailModal({
 // ─── Account Category Helper ──────────────────────────
 
 function getAccountCategory(account: Account): 'credit' | 'line-of-credit' | 'checking' | 'savings' | 'other' {
-  const subtype = account.subtype.toLowerCase();
-  const type = account.type.toLowerCase();
+  const subtype = (account.subtype || '').toLowerCase();
+  const type = (account.type || '').toLowerCase();
   if (subtype.includes('line of credit') || type === 'line of credit') return 'line-of-credit';
   if (type === 'credit' || subtype.includes('credit')) return 'credit';
-  if (type === 'depository' && account.subtype === 'checking') return 'checking';
-  if (type === 'depository' && account.subtype === 'savings') return 'savings';
+  if (type === 'depository' && subtype === 'checking') return 'checking';
+  if (type === 'depository' && subtype === 'savings') return 'savings';
   return 'other';
 }
 

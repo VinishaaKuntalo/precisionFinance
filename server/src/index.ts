@@ -242,7 +242,7 @@ app.get('/api/plaid/analytics', authMiddleware, (req: AuthenticatedRequest, res)
     FROM transactions t
     JOIN accounts a ON t.account_id = a.id
     JOIN plaid_items pi ON a.item_id = pi.id
-    WHERE pi.user_id = ? AND t.date >= ? AND t.status IS NOT 'deleted'
+    WHERE pi.user_id = ? AND t.date >= ?
     ORDER BY t.date DESC
   `).all(req.userId!, cutoffStr) as any[];
 
@@ -325,6 +325,31 @@ app.get('/api/plaid/analytics', authMiddleware, (req: AuthenticatedRequest, res)
     netFlow: Number((totalIncome - totalSpending).toFixed(2)),
     transactionCount: transactions.length,
   });
+});
+
+// ─── Transactions ─────────────────────────────────────
+
+app.get('/api/plaid/transactions', authMiddleware, (req: AuthenticatedRequest, res) => {
+  const { account_id, limit = '50' } = req.query;
+  let query = `
+    SELECT t.*, a.name as account_name, a.type as account_type
+    FROM transactions t
+    JOIN accounts a ON t.account_id = a.id
+    JOIN plaid_items pi ON a.item_id = pi.id
+    WHERE pi.user_id = ?
+  `;
+  const params: any[] = [req.userId!];
+
+  if (account_id) {
+    query += ' AND t.account_id = ?';
+    params.push(Number(account_id));
+  }
+
+  query += ' ORDER BY t.date DESC LIMIT ?';
+  params.push(Number(limit));
+
+  const transactions = db.prepare(query).all(...params) as any[];
+  res.json(transactions);
 });
 
 // ─── Sync ───────────────────────────────────────────
