@@ -40,6 +40,16 @@ export const authApi = {
       body: JSON.stringify(data),
     }),
   me: () => api<{ id: number; email: string; name: string }>('/api/auth/me'),
+  forgotPassword: (data: { email: string }) =>
+    api<{ message: string; resetUrl?: string }>('/api/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  resetPassword: (data: { token: string; password: string }) =>
+    api<{ message: string }>('/api/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 };
 
 export const plaidApi = {

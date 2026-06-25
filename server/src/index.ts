@@ -2,10 +2,12 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import { PlaidApi, PlaidEnvironments, Configuration, Products, CountryCode } from 'plaid';
 import db from './db.js';
 import { authMiddleware, generateToken } from './auth.js';
 import type { AuthenticatedRequest } from './auth.js';
+import { sendPasswordResetEmail } from './mail.js';
 
 dotenv.config();
 
@@ -65,6 +67,71 @@ app.get('/api/auth/me', authMiddleware, (req: AuthenticatedRequest, res) => {
     return;
   }
   res.json(user);
+});
+
+// ─── Forgot Password ──────────────────────────────────
+
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    res.status(400).json({ error: 'Email required' });
+    return;
+  }
+
+  const user = db.prepare('SELECT id, email, name FROM users WHERE email = ?').get(email) as any;
+  if (!user) {
+    // Don't reveal whether email exists
+    res.json({ message: 'If an account exists, a reset email has been sent.' });
+    return;
+  }
+
+  // Generate secure token
+  const token = crypto.randomBytes(32).toString('hex');
+  const expiresAt = new Date();
+  expiresAt.setHours(expiresAt.getHours() + 1);
+
+  // Invalidate old tokens
+  db.prepare("UPDATE password_reset_tokens SET used = 1 WHERE user_id = ?").run(user.id);
+
+  db.prepare('INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (?, ?, ?)').run(
+    user.id,
+    token,
+    expiresAt.toISOString()
+  );
+
+  try {
+    const result = await sendPasswordResetEmail(user.email, token);
+    res.json({
+      message: 'If an account exists, a reset email has been sent.',
+      ...(result.logged ? { resetUrl: result.resetUrl } : {}),
+    });
+  } catch (err: any) {
+    console.error('Failed to send reset email:', err.message);
+    res.status(500).json({ error: 'Failed to send reset email' });
+  }
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+  const { token, password } = req.body;
+  if (!token || !password || password.length < 6) {
+    res.status(400).json({ error: 'Token and password (min 6 chars) required' });
+    return;
+  }
+
+  const resetToken = db.prepare(
+    'SELECT * FROM password_reset_tokens WHERE token = ? AND used = 0 AND expires_at > datetime(\'now\')'
+  ).get(token) as any;
+
+  if (!resetToken) {
+    res.status(400).json({ error: 'Invalid or expired token' });
+    return;
+  }
+
+  const hash = await bcrypt.hash(password, 10);
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, resetToken.user_id);
+  db.prepare('UPDATE password_reset_tokens SET used = 1 WHERE id = ?').run(resetToken.id);
+
+  res.json({ message: 'Password updated successfully. Please log in.' });
 });
 
 // ─── Plaid Link ─────────────────────────────────────
