@@ -1,6 +1,7 @@
 import Navigation from '@/components/Navigation';
 import HeroSection from '@/sections/HeroSection';
 import DashboardSection from '@/sections/DashboardSection';
+import AnalyticsSection from '@/sections/AnalyticsSection';
 import ServiceEcosystem from '@/sections/ServiceEcosystem';
 import SavingsOptimization from '@/sections/SavingsOptimization';
 import FooterSection from '@/sections/FooterSection';
@@ -27,6 +28,7 @@ function AppContent() {
       <Navigation />
       <HeroSection />
       <DashboardSection />
+      <AnalyticsSection />
       <ServiceEcosystem />
       <SavingsOptimization />
       <FooterSection />

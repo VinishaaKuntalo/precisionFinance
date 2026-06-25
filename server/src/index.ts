@@ -204,27 +204,127 @@ app.get('/api/plaid/accounts', authMiddleware, (req: AuthenticatedRequest, res) 
   res.json(accounts);
 });
 
-app.get('/api/plaid/transactions', authMiddleware, (req: AuthenticatedRequest, res) => {
-  const { account_id, limit = '50' } = req.query;
-  let query = `
-    SELECT t.*, a.name as account_name, a.type as account_type
+app.delete('/api/plaid/accounts/:id', authMiddleware, (req: AuthenticatedRequest, res) => {
+  const accountId = req.params.id;
+  const account = db.prepare(`
+    SELECT a.id FROM accounts a
+    JOIN plaid_items pi ON a.item_id = pi.id
+    WHERE a.id = ? AND pi.user_id = ?
+  `).get(accountId, req.userId!) as any;
+
+  if (!account) {
+    res.status(404).json({ error: 'Account not found' });
+    return;
+  }
+
+  db.prepare("UPDATE accounts SET status = 'deleted' WHERE id = ?").run(accountId);
+  db.prepare("UPDATE payment_schedules SET status = 'deleted' WHERE account_id = ?").run(accountId);
+
+  res.json({ success: true, message: 'Account unlinked' });
+});
+
+app.get('/api/plaid/analytics', authMiddleware, (req: AuthenticatedRequest, res) => {
+  const { range = '30' } = req.query;
+  const days = Number(range);
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - days);
+  const cutoffStr = cutoffDate.toISOString().split('T')[0];
+
+  const accounts = db.prepare(`
+    SELECT a.*, pi.institution_name
+    FROM accounts a
+    JOIN plaid_items pi ON a.item_id = pi.id
+    WHERE pi.user_id = ? AND a.status = 'active'
+  `).all(req.userId!) as any[];
+
+  const transactions = db.prepare(`
+    SELECT t.*, a.name as account_name, a.type as account_type, a.subtype, a.currency_code
     FROM transactions t
     JOIN accounts a ON t.account_id = a.id
     JOIN plaid_items pi ON a.item_id = pi.id
-    WHERE pi.user_id = ?
-  `;
-  const params: any[] = [req.userId!];
+    WHERE pi.user_id = ? AND t.date >= ? AND t.status IS NOT 'deleted'
+    ORDER BY t.date DESC
+  `).all(req.userId!, cutoffStr) as any[];
 
-  if (account_id) {
-    query += ' AND t.account_id = ?';
-    params.push(Number(account_id));
+  // Credit cards summary
+  const creditCards = accounts.filter((a: any) => a.type === 'credit');
+  const creditSummary = creditCards.map((card: any) => ({
+    id: card.id,
+    name: card.name,
+    institution_name: card.institution_name,
+    mask: card.mask,
+    balance_current: card.balance_current,
+    balance_limit: card.balance_limit,
+    balance_available: card.balance_available,
+    utilization: card.balance_limit > 0 ? (card.balance_current / card.balance_limit) * 100 : 0,
+    currency_code: card.currency_code,
+  }));
+
+  // Spending by category
+  const categoryMap = new Map<string, number>();
+  for (const tx of transactions) {
+    if (tx.amount > 0 && !tx.pending) {
+      const cat = tx.category || 'Uncategorized';
+      categoryMap.set(cat, (categoryMap.get(cat) || 0) + tx.amount);
+    }
   }
+  const spendingByCategory = Array.from(categoryMap.entries())
+    .map(([name, value]) => ({ name, value: Number(value.toFixed(2)) }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 10);
 
-  query += ' ORDER BY t.date DESC LIMIT ?';
-  params.push(Number(limit));
+  // Daily spending (last 30 days)
+  const dailyMap = new Map<string, number>();
+  for (let i = 0; i < days; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    dailyMap.set(d.toISOString().split('T')[0], 0);
+  }
+  for (const tx of transactions) {
+    if (tx.amount > 0 && !tx.pending) {
+      dailyMap.set(tx.date, (dailyMap.get(tx.date) || 0) + tx.amount);
+    }
+  }
+  const dailySpending = Array.from(dailyMap.entries())
+    .map(([date, amount]) => ({ date, amount: Number(amount.toFixed(2)) }))
+    .sort((a, b) => a.date.localeCompare(b.date));
 
-  const transactions = db.prepare(query).all(...params) as any[];
-  res.json(transactions);
+  // Spending by account
+  const accountMap = new Map<number, { name: string; amount: number; type: string }>();
+  for (const tx of transactions) {
+    if (tx.amount > 0 && !tx.pending) {
+      const existing = accountMap.get(tx.account_id);
+      if (existing) {
+        existing.amount += tx.amount;
+      } else {
+        accountMap.set(tx.account_id, { name: tx.account_name, amount: tx.amount, type: tx.account_type });
+      }
+    }
+  }
+  const spendingByAccount = Array.from(accountMap.entries())
+    .map(([_, data]) => ({ name: data.name, amount: Number(data.amount.toFixed(2)), type: data.type }))
+    .sort((a, b) => b.amount - a.amount);
+
+  // Total spending
+  const totalSpending = transactions
+    .filter((tx: any) => tx.amount > 0 && !tx.pending)
+    .reduce((sum: number, tx: any) => sum + tx.amount, 0);
+
+  // Total income
+  const totalIncome = transactions
+    .filter((tx: any) => tx.amount < 0 && !tx.pending)
+    .reduce((sum: number, tx: any) => sum + Math.abs(tx.amount), 0);
+
+  res.json({
+    creditSummary,
+    spendingByCategory,
+    dailySpending,
+    spendingByAccount,
+    totalSpending: Number(totalSpending.toFixed(2)),
+    totalIncome: Number(totalIncome.toFixed(2)),
+    netFlow: Number((totalIncome - totalSpending).toFixed(2)),
+    transactionCount: transactions.length,
+  });
 });
 
 // ─── Sync ───────────────────────────────────────────

@@ -466,6 +466,18 @@ function CardDetailModal({
   );
 }
 
+// ─── Account Category Helper ──────────────────────────
+
+function getAccountCategory(account: Account): 'credit' | 'line-of-credit' | 'checking' | 'savings' | 'other' {
+  const subtype = account.subtype.toLowerCase();
+  const type = account.type.toLowerCase();
+  if (subtype.includes('line of credit') || type === 'line of credit') return 'line-of-credit';
+  if (type === 'credit' || subtype.includes('credit')) return 'credit';
+  if (type === 'depository' && account.subtype === 'checking') return 'checking';
+  if (type === 'depository' && account.subtype === 'savings') return 'savings';
+  return 'other';
+}
+
 // ─── Main Dashboard ───────────────────────────────────
 
 export default function DashboardSection() {
@@ -606,6 +618,21 @@ export default function DashboardSection() {
     }
   };
 
+  const handleDeleteAccount = async (accountId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!window.confirm('Remove this account from your dashboard?')) return;
+    try {
+      await plaidApi.deleteAccount(accountId);
+      if (selectedAccount?.id === accountId) setSelectedAccount(null);
+      if (scheduleAccount?.id === accountId) setScheduleAccount(null);
+      await fetchAccounts();
+      await fetchTransactions();
+      await fetchSchedules();
+    } catch (err: any) {
+      setError(err.message || 'Failed to remove account');
+    }
+  };
+
   const totalBalance = accounts.reduce((sum, a) => sum + (a.balance_current || 0), 0);
   const totalAvailable = accounts.reduce((sum, a) => sum + (a.balance_available || 0), 0);
   const creditAccounts = accounts.filter((a) => a.type === 'credit');
@@ -623,6 +650,44 @@ export default function DashboardSection() {
 
   const getScheduleForAccount = (accountId: number) =>
     schedules.find((s) => s.account_id === accountId) || null;
+
+  const accountGroups = [
+    {
+      title: 'Credit Cards',
+      category: 'credit' as const,
+      accounts: accounts.filter((a) => getAccountCategory(a) === 'credit'),
+      headerColor: 'text-red-500',
+      badgeClass: 'bg-red-500/10 text-red-500',
+    },
+    {
+      title: 'Line of Credit',
+      category: 'line-of-credit' as const,
+      accounts: accounts.filter((a) => getAccountCategory(a) === 'line-of-credit'),
+      headerColor: 'text-orange-500',
+      badgeClass: 'bg-orange-500/10 text-orange-500',
+    },
+    {
+      title: 'Checking',
+      category: 'checking' as const,
+      accounts: accounts.filter((a) => getAccountCategory(a) === 'checking'),
+      headerColor: 'text-blue-500',
+      badgeClass: 'bg-blue-500/10 text-blue-500',
+    },
+    {
+      title: 'Savings',
+      category: 'savings' as const,
+      accounts: accounts.filter((a) => getAccountCategory(a) === 'savings'),
+      headerColor: 'text-green-500',
+      badgeClass: 'bg-green-500/10 text-green-500',
+    },
+    {
+      title: 'Other Accounts',
+      category: 'other' as const,
+      accounts: accounts.filter((a) => getAccountCategory(a) === 'other'),
+      headerColor: 'text-zinc-500',
+      badgeClass: 'bg-zinc-500/10 text-zinc-500',
+    },
+  ].filter((g) => g.accounts.length > 0);
 
   return (
     <section id="dashboard" className="relative w-full bg-black py-32">
@@ -764,7 +829,7 @@ export default function DashboardSection() {
           </div>
         )}
 
-        {/* Accounts Grid */}
+        {/* Accounts by Group */}
         <div className="mb-12">
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-xl font-semibold text-white">Linked Accounts</h3>
@@ -804,93 +869,134 @@ export default function DashboardSection() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {accounts.map((account) => {
-              const isCredit = account.type === 'credit';
-              const utilization = isCredit && account.balance_limit
-                ? (account.balance_current / account.balance_limit) * 100
-                : 0;
-              const schedule = getScheduleForAccount(account.id);
-              const hasSchedule = !!schedule;
-
-              return (
-                <div
-                  key={account.id}
-                  className="bg-[#121212] border border-white/10 p-5 cursor-pointer group hover:border-red-500/30 transition-all"
-                  style={{ borderRadius: '4px' }}
-                  onClick={() => setSelectedAccount(account)}
-                >
-                  <div className="flex items-start justify-between mb-4">
-                    <div className="flex items-center gap-3">
-                      <div
-                        className="w-9 h-9 flex items-center justify-center text-white font-bold text-[10px]"
-                        style={{ backgroundColor: getCardColor(account.type, account.subtype), borderRadius: '4px' }}
-                      >
-                        {getCardLogo(account.institution_name, account.type)}
-                      </div>
-                      <div>
-                        <p className="text-white text-sm font-medium">{account.institution_name}</p>
-                        <p className="text-zinc-600 text-xs font-mono-data">**** {account.mask || '0000'}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      {hasSchedule && schedule?.autopay_enabled && (
-                        <span title="Autopay on"><CheckCircle2 className="w-3.5 h-3.5 text-green-500" /></span>
-                      )}
-                      <CheckCircle2 className="w-4 h-4 text-green-500" />
-                    </div>
-                  </div>
-
-                  <div className="mb-4">
-                    <p className="text-zinc-500 text-xs font-mono-data uppercase mb-1">Balance</p>
-                    <p className="text-white text-xl font-bold">
-                      {formatCurrency(account.balance_current, account.currency_code)}
-                    </p>
-                  </div>
-
-                  {isCredit && account.balance_limit > 0 && (
-                    <div className="mb-3">
-                      <div className="flex items-center justify-between text-xs mb-1">
-                        <span className="text-zinc-600 font-mono-data">{utilization.toFixed(0)}% used</span>
-                        <span className="text-zinc-600 font-mono-data">
-                          {formatCurrency(account.balance_available, account.currency_code)} avail
-                        </span>
-                      </div>
-                      <div className="w-full h-1.5 bg-white/5 overflow-hidden" style={{ borderRadius: '2px' }}>
-                        <div
-                          className="h-full transition-all"
-                          style={{
-                            width: `${Math.min(utilization, 100)}%`,
-                            backgroundColor: utilization > 80 ? '#ef4444' : utilization > 50 ? '#f97316' : '#22c55e',
-                            borderRadius: '2px',
-                          }}
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Payment schedule indicator */}
-                  {hasSchedule && (
-                    <div className="flex items-center gap-1.5 mb-3 pt-2 border-t border-white/5">
-                      <Calendar className="w-3 h-3 text-zinc-600" />
-                      <span className="text-xs font-mono-data text-zinc-500">
-                        Due day {schedule.due_day}
-                      </span>
-                      {schedule.autopay_enabled && (
-                        <span className="text-xs font-mono-data text-green-500 ml-1">• Autopay</span>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="flex items-center justify-between pt-3 border-t border-white/5">
-                    <span className="text-xs font-mono-data text-zinc-500 capitalize">
-                      {account.subtype || account.type}
-                    </span>
-                    <ChevronRight className="w-4 h-4 text-zinc-700 group-hover:text-red-500 transition-colors" />
-                  </div>
+          <div className="space-y-10">
+            {accountGroups.map((group) => (
+              <div key={group.category}>
+                <div className="flex items-center gap-3 mb-4">
+                  <h4 className={`text-lg font-semibold ${group.headerColor}`}>
+                    {group.title}
+                  </h4>
+                  <span className={`text-xs font-mono-data px-2 py-0.5 ${group.badgeClass}`} style={{ borderRadius: '4px' }}>
+                    {group.accounts.length}
+                  </span>
                 </div>
-              );
-            })}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {group.accounts.map((account) => {
+                    const category = group.category;
+                    const isCredit = category === 'credit';
+                    const isDepository = category === 'checking' || category === 'savings';
+                    const schedule = getScheduleForAccount(account.id);
+                    const hasSchedule = !!schedule;
+                    const cardColor = getCardColor(account.type, account.subtype);
+                    const utilization = isCredit && account.balance_limit
+                      ? (account.balance_current / account.balance_limit) * 100
+                      : 0;
+
+                    return (
+                      <div
+                        key={account.id}
+                        className={`bg-[#121212] border border-white/10 cursor-pointer group hover:border-white/20 transition-all relative border-l-4 ${
+                          isCredit ? 'p-6 bg-red-500/[0.03]' : isDepository ? (category === 'checking' ? 'p-5 bg-blue-500/[0.03]' : 'p-5 bg-green-500/[0.03]') : 'p-5'
+                        }`}
+                        style={{ borderRadius: '4px', borderLeftColor: cardColor }}
+                        onClick={() => setSelectedAccount(account)}
+                      >
+                        {/* Unlink button */}
+                        <button
+                          onClick={(e) => handleDeleteAccount(account.id, e)}
+                          className="absolute top-3 right-3 p-1.5 text-zinc-700 hover:text-red-500 transition-colors z-10"
+                          title="Remove account"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+
+                        <div className="flex items-start justify-between mb-4 pr-6">
+                          <div className="flex items-center gap-3">
+                            <div
+                              className="w-9 h-9 flex items-center justify-center text-white font-bold text-[10px]"
+                              style={{ backgroundColor: cardColor, borderRadius: '4px' }}
+                            >
+                              {getCardLogo(account.institution_name, account.type)}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <p className="text-white text-sm font-medium">{account.institution_name}</p>
+                                {isCredit && (
+                                  <span className="text-[10px] font-mono-data uppercase text-red-500 bg-red-500/10 px-1.5 py-0.5" style={{ borderRadius: '4px' }}>
+                                    Credit
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-zinc-600 text-xs font-mono-data">**** {account.mask || '0000'}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            {hasSchedule && schedule?.autopay_enabled && (
+                              <span title="Autopay on"><CheckCircle2 className="w-3.5 h-3.5 text-green-500" /></span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="mb-4">
+                          <p className="text-zinc-500 text-xs font-mono-data uppercase mb-1">
+                            {isCredit ? 'Current Balance' : 'Balance'}
+                          </p>
+                          <p className="text-white text-xl font-bold">
+                            {formatCurrency(account.balance_current, account.currency_code)}
+                          </p>
+                        </div>
+
+                        {isCredit && account.balance_limit > 0 && (
+                          <div className="mb-4">
+                            <div className="flex items-center justify-between text-xs mb-2">
+                              <span className="text-zinc-500 font-mono-data">{utilization.toFixed(0)}% utilized</span>
+                              <span className="text-zinc-500 font-mono-data">
+                                {formatCurrency(account.balance_available, account.currency_code)} avail
+                              </span>
+                            </div>
+                            <div className="w-full h-2 bg-white/5 overflow-hidden" style={{ borderRadius: '2px' }}>
+                              <div
+                                className="h-full transition-all"
+                                style={{
+                                  width: `${Math.min(utilization, 100)}%`,
+                                  backgroundColor: utilization > 80 ? '#ef4444' : utilization > 50 ? '#f97316' : '#22c55e',
+                                  borderRadius: '2px',
+                                }}
+                              />
+                            </div>
+                            <div className="mt-2 flex items-center justify-between">
+                              <span className="text-zinc-500 text-xs font-mono-data">
+                                Limit: {formatCurrency(account.balance_limit, account.currency_code)}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Payment schedule indicator */}
+                        {hasSchedule && (
+                          <div className="flex items-center gap-1.5 mb-3 pt-2 border-t border-white/5">
+                            <Calendar className="w-3 h-3 text-zinc-600" />
+                            <span className="text-xs font-mono-data text-zinc-500">
+                              Due day {schedule.due_day}
+                            </span>
+                            {schedule.autopay_enabled && (
+                              <span className="text-xs font-mono-data text-green-500 ml-1">• Autopay</span>
+                            )}
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-between pt-3 border-t border-white/5">
+                          <span className="text-xs font-mono-data text-zinc-500 capitalize">
+                            {account.subtype || account.type}
+                          </span>
+                          <ChevronRight className="w-4 h-4 text-zinc-700 group-hover:text-red-500 transition-colors" />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 

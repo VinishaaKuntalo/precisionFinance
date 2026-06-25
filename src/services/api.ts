@@ -75,6 +75,8 @@ export const plaidApi = {
         institution_name: string;
       }>
     >('/api/plaid/accounts'),
+  deleteAccount: (id: number) =>
+    api<{ success: boolean; message: string }>(`/api/plaid/accounts/${id}`, { method: 'DELETE' }),
   getTransactions: (accountId?: number, limit = 50) =>
     api<
       Array<{
@@ -90,6 +92,27 @@ export const plaidApi = {
         account_type: string;
       }>
     >(`/api/plaid/transactions?${accountId ? `account_id=${accountId}&` : ''}limit=${limit}`),
+  getAnalytics: (range = 30) =>
+    api<{
+      creditSummary: Array<{
+        id: number;
+        name: string;
+        institution_name: string;
+        mask: string;
+        balance_current: number;
+        balance_limit: number;
+        balance_available: number;
+        utilization: number;
+        currency_code: string;
+      }>;
+      spendingByCategory: Array<{ name: string; value: number }>;
+      dailySpending: Array<{ date: string; amount: number }>;
+      spendingByAccount: Array<{ name: string; amount: number; type: string }>;
+      totalSpending: number;
+      totalIncome: number;
+      netFlow: number;
+      transactionCount: number;
+    }>('/api/plaid/analytics?range=' + range),
   sync: () => api<{ synced: number; results: any[] }>('/api/plaid/sync', { method: 'POST' }),
 };
 

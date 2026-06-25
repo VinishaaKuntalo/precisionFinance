@@ -4,6 +4,7 @@ import { useAuth } from '@/context/AuthContext';
 
 const navLinks = [
   { label: 'Dashboard', href: '#dashboard' },
+  { label: 'Analytics', href: '#analytics' },
   { label: 'Services', href: '#ecosystem' },
   { label: 'Optimization', href: '#optimization' },
 ];
