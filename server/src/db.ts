@@ -95,6 +95,23 @@ db.exec(`
     used INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS liabilities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    plaid_account_id TEXT UNIQUE NOT NULL,
+    next_payment_due_date TEXT,
+    minimum_payment_amount REAL,
+    last_payment_date TEXT,
+    last_payment_amount REAL,
+    statement_balance REAL,
+    last_statement_issue_date TEXT,
+    last_statement_balance REAL,
+    is_overdue INTEGER DEFAULT 0,
+    auto_pulled INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 export default db;

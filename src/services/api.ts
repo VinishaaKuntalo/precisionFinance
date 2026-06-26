@@ -114,6 +114,45 @@ export const plaidApi = {
       transactionCount: number;
     }>('/api/plaid/analytics?range=' + range),
   sync: () => api<{ synced: number; results: any[] }>('/api/plaid/sync', { method: 'POST' }),
+  getLiabilities: () =>
+    api<
+      Array<{
+        account_id: number;
+        plaid_account_id: string;
+        next_payment_due_date: string;
+        minimum_payment_amount: number;
+        last_payment_date: string;
+        last_payment_amount: number;
+        statement_balance: number;
+        last_statement_issue_date: string;
+        last_statement_balance: number;
+        is_overdue: boolean;
+      }>
+    >('/api/plaid/liabilities'),
+  getLiabilitiesDb: () =>
+    api<
+      Array<{
+        id: number;
+        account_id: number;
+        plaid_account_id: string;
+        next_payment_due_date: string;
+        minimum_payment_amount: number;
+        last_payment_date: string;
+        last_payment_amount: number;
+        statement_balance: number;
+        last_statement_issue_date: string;
+        last_statement_balance: number;
+        is_overdue: boolean;
+        auto_pulled: number;
+        account_name: string;
+        institution_name: string;
+        mask: string;
+        type: string;
+        balance_current: number;
+        balance_limit: number;
+        currency_code: string;
+      }>
+    >('/api/plaid/liabilities-db'),
 };
 
 export const paymentsApi = {

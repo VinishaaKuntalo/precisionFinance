@@ -12,7 +12,21 @@ import { sendPasswordResetEmail } from './mail.js';
 dotenv.config();
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: (origin, callback) => {
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'https://precisionfinance-ca.netlify.app',
+      'https://q56276craqywq.kimi.page',
+    ];
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+}));
 app.use(express.json());
 
 // Plaid client setup
@@ -138,14 +152,22 @@ app.post('/api/auth/reset-password', async (req, res) => {
 
 app.post('/api/plaid/link-token', authMiddleware, async (req: AuthenticatedRequest, res) => {
   try {
+    const redirectUri = process.env.PLAID_REDIRECT_URI || (
+      process.env.PLAID_ENV === 'production'
+        ? 'https://precisionfinance-ca.netlify.app/'
+        : 'http://localhost:3000'
+    );
+
     const tokenResponse = await plaidClient.linkTokenCreate({
       user: { client_user_id: String(req.userId!) },
       client_name: 'Precision Finance',
-      products: [Products.Transactions],
-      country_codes: [CountryCode.Us, CountryCode.Ca],
+      products: [Products.Transactions, Products.Auth, Products.Liabilities],
+      country_codes: [CountryCode.Ca, CountryCode.Us],
       language: 'en',
-      redirect_uri: process.env.PLAID_REDIRECT_URI,
+      redirect_uri: redirectUri,
     });
+
+    console.log(`Link token created for user ${req.userId}, redirect_uri: ${redirectUri}`);
     res.json({ link_token: tokenResponse.data.link_token });
   } catch (err: any) {
     console.error('Link token error:', err.response?.data || err.message);
@@ -327,6 +349,91 @@ app.get('/api/plaid/analytics', authMiddleware, (req: AuthenticatedRequest, res)
   });
 });
 
+// ─── Liabilities (Auto-pulled statement info) ─────────
+
+app.get('/api/plaid/liabilities', authMiddleware, async (req: AuthenticatedRequest, res) => {
+  try {
+    const items = db.prepare('SELECT * FROM plaid_items WHERE user_id = ? AND status = ?').all(req.userId!, 'active') as any[];
+    
+    const allLiabilities = [];
+    for (const item of items) {
+      try {
+        const response = await plaidClient.liabilitiesGet({ access_token: item.access_token });
+        const creditCards = response.data.liabilities?.credit || [];
+        
+        for (const liability of creditCards) {
+          // Find the account_id in our database
+          const account = db.prepare('SELECT id FROM accounts WHERE plaid_account_id = ?').get(liability.account_id) as any;
+          if (!account) continue;
+
+          // Upsert liability data
+          db.prepare(`
+            INSERT INTO liabilities (
+              account_id, plaid_account_id, next_payment_due_date, minimum_payment_amount,
+              last_payment_date, last_payment_amount, statement_balance, last_statement_issue_date,
+              last_statement_balance, is_overdue, auto_pulled
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(plaid_account_id) DO UPDATE SET
+              next_payment_due_date = excluded.next_payment_due_date,
+              minimum_payment_amount = excluded.minimum_payment_amount,
+              last_payment_date = excluded.last_payment_date,
+              last_payment_amount = excluded.last_payment_amount,
+              statement_balance = excluded.statement_balance,
+              last_statement_issue_date = excluded.last_statement_issue_date,
+              last_statement_balance = excluded.last_statement_balance,
+              is_overdue = excluded.is_overdue,
+              updated_at = CURRENT_TIMESTAMP
+          `).run(
+            account.id,
+            liability.account_id,
+            liability.next_payment_due_date || null,
+            liability.minimum_payment_amount || null,
+            liability.last_payment_date || null,
+            liability.last_payment_amount || null,
+            liability.last_statement_balance || null,
+            liability.last_statement_issue_date || null,
+            liability.last_statement_balance || null,
+            liability.is_overdue ? 1 : 0,
+            1
+          );
+
+          allLiabilities.push({
+            account_id: account.id,
+            plaid_account_id: liability.account_id,
+            next_payment_due_date: liability.next_payment_due_date,
+            minimum_payment_amount: liability.minimum_payment_amount,
+            last_payment_date: liability.last_payment_date,
+            last_payment_amount: liability.last_payment_amount,
+            last_statement_balance: liability.last_statement_balance,
+            last_statement_issue_date: liability.last_statement_issue_date,
+            is_overdue: liability.is_overdue,
+          });
+        }
+      } catch (err: any) {
+        console.error(`Liabilities error for item ${item.item_id}:`, err.response?.data || err.message);
+        // Continue with other items even if one fails
+      }
+    }
+
+    res.json(allLiabilities);
+  } catch (err: any) {
+    console.error('Liabilities error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch liabilities' });
+  }
+});
+
+app.get('/api/plaid/liabilities-db', authMiddleware, (req: AuthenticatedRequest, res) => {
+  const liabilities = db.prepare(`
+    SELECT l.*, a.name as account_name, a.institution_name, a.mask, a.type, a.subtype, a.balance_current, a.balance_limit, a.currency_code
+    FROM liabilities l
+    JOIN accounts a ON l.account_id = a.id
+    JOIN plaid_items pi ON a.item_id = pi.id
+    WHERE pi.user_id = ?
+    ORDER BY l.next_payment_due_date ASC
+  `).all(req.userId!) as any[];
+  res.json(liabilities);
+});
+
 // ─── Transactions ─────────────────────────────────────
 
 app.get('/api/plaid/transactions', authMiddleware, (req: AuthenticatedRequest, res) => {
@@ -362,6 +469,7 @@ app.post('/api/plaid/sync', authMiddleware, async (req: AuthenticatedRequest, re
     try {
       await syncAccounts(item.access_token, req.userId!);
       await syncTransactions(item.access_token, item.id, req.userId!);
+      await syncLiabilities(item.access_token, req.userId!);
       results.push({ item_id: item.item_id, status: 'success' });
     } catch (err: any) {
       console.error(`Sync error for item ${item.item_id}:`, err.message);
@@ -458,6 +566,53 @@ async function syncTransactions(accessToken: string, itemDbId: number, userId: n
       tx.pending ? 1 : 0,
       tx.transaction_type || null
     );
+  }
+}
+
+// ─── Helper: sync liabilities from Plaid ────────────
+
+async function syncLiabilities(accessToken: string, userId: number) {
+  try {
+    const response = await plaidClient.liabilitiesGet({ access_token: accessToken });
+    const creditCards = response.data.liabilities?.credit || [];
+
+    for (const liability of creditCards) {
+      const account = db.prepare('SELECT id FROM accounts WHERE plaid_account_id = ?').get(liability.account_id) as any;
+      if (!account) continue;
+
+      db.prepare(`
+        INSERT INTO liabilities (
+          account_id, plaid_account_id, next_payment_due_date, minimum_payment_amount,
+          last_payment_date, last_payment_amount, statement_balance, last_statement_issue_date,
+          last_statement_balance, is_overdue, auto_pulled
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(plaid_account_id) DO UPDATE SET
+          next_payment_due_date = excluded.next_payment_due_date,
+          minimum_payment_amount = excluded.minimum_payment_amount,
+          last_payment_date = excluded.last_payment_date,
+          last_payment_amount = excluded.last_payment_amount,
+          statement_balance = excluded.statement_balance,
+          last_statement_issue_date = excluded.last_statement_issue_date,
+          last_statement_balance = excluded.last_statement_balance,
+          is_overdue = excluded.is_overdue,
+          updated_at = CURRENT_TIMESTAMP
+      `).run(
+        account.id,
+        liability.account_id,
+        liability.next_payment_due_date || null,
+        liability.minimum_payment_amount || null,
+        liability.last_payment_date || null,
+        liability.last_payment_amount || null,
+        liability.last_statement_balance || null,
+        liability.last_statement_issue_date || null,
+        liability.last_statement_balance || null,
+        liability.is_overdue ? 1 : 0,
+        1
+      );
+    }
+  } catch (err: any) {
+    console.error('Liabilities sync error:', err.response?.data || err.message);
+    // Don't throw — liabilities are optional, shouldn't block sync
   }
 }
 

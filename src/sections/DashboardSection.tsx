@@ -21,6 +21,8 @@ import {
   Settings,
   Trash2,
   Save,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 
 function formatCurrency(amount: number, currency = 'CAD') {
@@ -492,6 +494,11 @@ export default function DashboardSection() {
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState('');
   const [plaidError, setPlaidError] = useState('');
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const [transactionsExpanded, setTransactionsExpanded] = useState(false);
 
   const fetchAccounts = useCallback(async () => {
     setLoading(true);
@@ -568,11 +575,32 @@ export default function DashboardSection() {
   const { open, ready } = usePlaidLink({
     token: linkToken,
     onSuccess,
-    onExit: (err) => {
+    onExit: (err, metadata) => {
       if (err?.error_code) {
-        setPlaidError(`Plaid Error: ${err.error_message || err.error_code}`);
+        const errorCode = err.error_code;
+        let userMessage = `Plaid Error: ${err.error_message || errorCode}`;
+        
+        // OAuth-specific error handling
+        if (errorCode === 'OAUTH_NEEDED' || errorCode === 'INSTITUTION_NOT_ENABLED') {
+          userMessage = 'Wealthsimple requires OAuth. Please ensure: (1) OAuth is enabled in your Plaid Dashboard, (2) Your redirect URI is registered, (3) Try using the Plaid Sandbox test credentials first.';
+        } else if (errorCode === 'ITEM_LOGIN_REQUIRED') {
+          userMessage = 'Login failed. If MFA is enabled, ensure you complete the full OAuth flow on the bank\'s website.';
+        } else if (errorCode === 'INSTITUTION_DOWN') {
+          userMessage = 'Wealthsimple is temporarily unavailable. Please try again later.';
+        } else if (errorCode === 'USER_PERMISSION_REVOKED') {
+          userMessage = 'Access was denied. Please check your Wealthsimple account permissions.';
+        }
+        
+        setPlaidError(userMessage);
+        console.log('Plaid exit:', { errorCode, metadata });
       }
       setLinkToken(null);
+    },
+    onEvent: (eventName, metadata) => {
+      // Log OAuth events for debugging
+      if (eventName === 'OPEN_OAUTH' || eventName === 'HANDOFF' || eventName === 'ERROR') {
+        console.log('Plaid event:', eventName, metadata);
+      }
     },
   });
 
@@ -633,6 +661,26 @@ export default function DashboardSection() {
     }
   };
 
+  // Month options for the filter dropdown
+  const monthOptions = [];
+  const now = new Date();
+  for (let i = -2; i <= 2; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const label = d.toLocaleString('en-CA', { month: 'long', year: 'numeric' });
+    monthOptions.push({ value, label });
+  }
+
+  const filteredTransactions = transactions.filter((t) => t.date && t.date.startsWith(selectedMonth));
+
+  const filteredUpcomingPayments = upcomingPayments.filter((p) => {
+    if (p.daysUntilDue === undefined) return false;
+    const dueDate = new Date();
+    dueDate.setDate(dueDate.getDate() + p.daysUntilDue);
+    const dueMonth = `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, '0')}`;
+    return dueMonth === selectedMonth;
+  });
+
   const totalBalance = accounts.reduce((sum, a) => sum + (a.balance_current || 0), 0);
   const totalAvailable = accounts.reduce((sum, a) => sum + (a.balance_available || 0), 0);
   const creditAccounts = accounts.filter((a) => a.type === 'credit');
@@ -640,13 +688,13 @@ export default function DashboardSection() {
   const totalCreditUsed = creditAccounts.reduce((sum, a) => sum + (a.balance_current || 0), 0);
   const utilizationRate = totalCreditLimit > 0 ? (totalCreditUsed / totalCreditLimit) * 100 : 0;
 
-  const monthlySpending = transactions
+  const monthlySpending = filteredTransactions
     .filter((t) => t.amount > 0 && !t.pending)
     .reduce((sum, t) => sum + t.amount, 0);
 
-  const totalMinDue = upcomingPayments.reduce((sum, p) => sum + (p.minimum_payment || 0), 0);
-  const overdueCount = upcomingPayments.filter((p) => p.isOverdue).length;
-  const urgentCount = upcomingPayments.filter((p) => p.isUrgent && !p.isOverdue).length;
+  const totalMinDue = filteredUpcomingPayments.reduce((sum, p) => sum + (p.minimum_payment || 0), 0);
+  const overdueCount = filteredUpcomingPayments.filter((p) => p.isOverdue).length;
+  const urgentCount = filteredUpcomingPayments.filter((p) => p.isUrgent && !p.isOverdue).length;
 
   const getScheduleForAccount = (accountId: number) =>
     schedules.find((s) => s.account_id === accountId) || null;
@@ -699,17 +747,46 @@ export default function DashboardSection() {
           </h2>
         </div>
 
+        {/* Month Filter */}
+        <div className="flex items-center gap-3 mb-6">
+          <Calendar className="w-4 h-4 text-zinc-500" />
+          <span className="text-zinc-500 text-xs font-mono-data uppercase">Period</span>
+          <select
+            value={selectedMonth}
+            onChange={(e) => setSelectedMonth(e.target.value)}
+            className="bg-[#121212] border border-white/10 text-white text-sm px-3 py-2 focus:border-red-500 focus:outline-none cursor-pointer"
+            style={{ borderRadius: '4px' }}
+          >
+            {monthOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
         {/* Error Banner */}
         {(error || plaidError) && (
-          <div className="bg-red-500/10 border border-red-500/20 p-4 mb-6 flex items-start gap-3" style={{ borderRadius: '4px' }}>
-            <AlertTriangle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
-            <div>
-              <p className="text-red-400 text-sm font-medium">{plaidError || error}</p>
-              {plaidError && plaidError.includes('OAuth') && (
-                <p className="text-zinc-500 text-xs mt-1">
-                  Some Canadian institutions (like Wealthsimple) require OAuth setup in your Plaid Dashboard. Go to Plaid Dashboard → Institutions → ensure OAuth is enabled for the institution.
-                </p>
-              )}
+          <div className="bg-red-500/10 border border-red-500/20 p-4 mb-6" style={{ borderRadius: '4px' }}>
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
+              <div className="flex-1">
+                <p className="text-red-400 text-sm font-medium">{plaidError || error}</p>
+                {plaidError && (plaidError.includes('OAuth') || plaidError.includes('Wealthsimple')) && (
+                  <div className="mt-2 space-y-1 text-zinc-500 text-xs">
+                    <p><strong className="text-zinc-400">To fix Wealthsimple / OAuth institutions:</strong></p>
+                    <ol className="list-decimal list-inside space-y-0.5 ml-1">
+                      <li>Go to <a href="https://dashboard.plaid.com" target="_blank" rel="noopener noreferrer" className="text-red-500 hover:underline">Plaid Dashboard</a> → API → OAuth</li>
+                      <li>Add your app URL as a redirect URI: <code className="text-zinc-400">https://precisionfinance-ca.netlify.app/</code></li>
+                      <li>Also add for local testing: <code className="text-zinc-400">http://localhost:3000</code></li>
+                      <li>Save and wait ~5 minutes for Plaid to propagate</li>
+                      <li>Restart your backend server</li>
+                      <li>Try linking again — you'll be redirected to Wealthsimple to log in</li>
+                    </ol>
+                    <p className="mt-1 text-zinc-600">Note: Your MFA/2FA happens on Wealthsimple's website, not inside this app.</p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -758,9 +835,9 @@ export default function DashboardSection() {
           </div>
         </div>
 
-        {/* Upcoming Payments Calendar */}
-        {upcomingPayments.length > 0 && (
-          <div className="mb-12">
+        {/* Upcoming Payments Calendar — moved to position 2 with red left border */}
+        {filteredUpcomingPayments.length > 0 && (
+          <div className="mb-12 border-l-4 border-red-500 pl-4">
             <div className="flex items-center gap-2 mb-6">
               <Bell className="w-4 h-4 text-red-500" strokeWidth={1.5} />
               <h3 className="text-xl font-semibold text-white">Payment Calendar</h3>
@@ -779,7 +856,7 @@ export default function DashboardSection() {
                 <span className="col-span-2">Status</span>
                 <span className="col-span-1"></span>
               </div>
-              {upcomingPayments.map((payment) => {
+              {filteredUpcomingPayments.map((payment) => {
                 const isOverdue = payment.isOverdue;
                 const isUrgent = payment.isUrgent && !isOverdue;
                 return (
@@ -1000,51 +1077,74 @@ export default function DashboardSection() {
           </div>
         </div>
 
-        {/* Recent Transactions Table */}
-        <div>
-          <h3 className="text-xl font-semibold text-white mb-6">Recent Transactions</h3>
-          <div className="bg-[#121212] border border-white/10" style={{ borderRadius: '4px' }}>
-            <div className="grid grid-cols-12 gap-4 px-6 py-3 border-b border-white/5 text-zinc-600 text-xs font-mono-data uppercase">
-              <span className="col-span-3">Merchant</span>
-              <span className="col-span-2">Account</span>
-              <span className="col-span-2">Date</span>
-              <span className="col-span-2">Amount</span>
-              <span className="col-span-2">Status</span>
-              <span className="col-span-1"></span>
-            </div>
-            {transactions.length === 0 && !loading && (
-              <div className="px-6 py-8 text-center text-zinc-500 text-sm">No transactions yet. Sync your accounts to pull data.</div>
-            )}
-            {transactions.slice(0, 10).map((tx) => (
-              <div
-                key={tx.id}
-                className="grid grid-cols-12 gap-4 px-6 py-4 border-b border-white/5 items-center hover:bg-white/[0.02] transition-colors"
-              >
-                <span className="col-span-3 text-white text-sm font-medium truncate">{tx.name}</span>
-                <span className="col-span-2 text-zinc-500 text-xs font-mono-data">{tx.account_name}</span>
-                <span className="col-span-2 text-zinc-400 text-xs font-mono-data">{tx.date}</span>
-                <span className={`col-span-2 text-sm font-mono-data font-medium ${tx.amount < 0 ? 'text-green-400' : 'text-white'}`}>
-                  {tx.amount < 0 ? '' : '+'}
-                  {formatCurrency(Math.abs(tx.amount))}
-                </span>
-                <span className="col-span-2">
-                  <span
-                    className={`text-xs font-mono-data px-2 py-1 ${
-                      tx.pending ? 'text-yellow-400 bg-yellow-400/10' : 'text-green-400 bg-green-400/10'
-                    }`}
-                    style={{ borderRadius: '4px' }}
-                  >
-                    {tx.pending ? 'Pending' : 'Posted'}
-                  </span>
-                </span>
-                <span className="col-span-1 flex justify-end">
-                  <button className="p-1.5 text-zinc-700 hover:text-red-500 transition-colors">
-                    <Banknote className="w-4 h-4" />
-                  </button>
-                </span>
+        {/* Recent Transactions Table — collapsible */}
+        <div className="mb-12">
+          {!transactionsExpanded ? (
+            <button
+              onClick={() => setTransactionsExpanded(true)}
+              className="flex items-center gap-3 bg-[#121212] border border-white/10 px-6 py-4 text-white font-medium hover:border-red-500/50 transition-colors w-full"
+              style={{ borderRadius: '4px' }}
+            >
+              <Banknote className="w-4 h-4 text-zinc-500" />
+              <span>View Transactions ({filteredTransactions.length})</span>
+              <ChevronDown className="w-4 h-4 text-zinc-500 ml-auto" />
+            </button>
+          ) : (
+            <>
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-xl font-semibold text-white">Recent Transactions</h3>
+                <button
+                  onClick={() => setTransactionsExpanded(false)}
+                  className="flex items-center gap-1 text-zinc-500 hover:text-white text-sm font-medium transition-colors"
+                >
+                  <ChevronUp className="w-4 h-4" />
+                  Hide
+                </button>
               </div>
-            ))}
-          </div>
+              <div className="bg-[#121212] border border-white/10" style={{ borderRadius: '4px' }}>
+                <div className="grid grid-cols-12 gap-4 px-6 py-3 border-b border-white/5 text-zinc-600 text-xs font-mono-data uppercase">
+                  <span className="col-span-3">Merchant</span>
+                  <span className="col-span-2">Account</span>
+                  <span className="col-span-2">Date</span>
+                  <span className="col-span-2">Amount</span>
+                  <span className="col-span-2">Status</span>
+                  <span className="col-span-1"></span>
+                </div>
+                {filteredTransactions.length === 0 && !loading && (
+                  <div className="px-6 py-8 text-center text-zinc-500 text-sm">No transactions for this period.</div>
+                )}
+                {filteredTransactions.slice(0, 10).map((tx) => (
+                  <div
+                    key={tx.id}
+                    className="grid grid-cols-12 gap-4 px-6 py-4 border-b border-white/5 items-center hover:bg-white/[0.02] transition-colors"
+                  >
+                    <span className="col-span-3 text-white text-sm font-medium truncate">{tx.name}</span>
+                    <span className="col-span-2 text-zinc-500 text-xs font-mono-data">{tx.account_name}</span>
+                    <span className="col-span-2 text-zinc-400 text-xs font-mono-data">{tx.date}</span>
+                    <span className={`col-span-2 text-sm font-mono-data font-medium ${tx.amount < 0 ? 'text-green-400' : 'text-white'}`}>
+                      {tx.amount < 0 ? '' : '+'}
+                      {formatCurrency(Math.abs(tx.amount))}
+                    </span>
+                    <span className="col-span-2">
+                      <span
+                        className={`text-xs font-mono-data px-2 py-1 ${
+                          tx.pending ? 'text-yellow-400 bg-yellow-400/10' : 'text-green-400 bg-green-400/10'
+                        }`}
+                        style={{ borderRadius: '4px' }}
+                      >
+                        {tx.pending ? 'Pending' : 'Posted'}
+                      </span>
+                    </span>
+                    <span className="col-span-1 flex justify-end">
+                      <button className="p-1.5 text-zinc-700 hover:text-red-500 transition-colors">
+                        <Banknote className="w-4 h-4" />
+                      </button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </div>
 
