@@ -13,8 +13,8 @@ function AppContent() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
-        <div className="text-zinc-500 text-sm font-mono-data">Loading...</div>
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-muted-foreground text-sm font-mono-data">Loading...</div>
       </div>
     );
   }
@@ -24,7 +24,7 @@ function AppContent() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-white overflow-x-hidden">
+    <div className="min-h-screen bg-background text-foreground overflow-x-hidden">
       <Navigation />
       <HeroSection />
       <DashboardSection />

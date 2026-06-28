@@ -100,13 +100,13 @@ export default function AuthScreen() {
   };
 
   return (
-    <div className="min-h-screen bg-black flex items-center justify-center px-6">
-      <div className="w-full max-w-sm bg-[#121212] border border-white/10 p-8" style={{ borderRadius: '4px' }}>
+    <div className="min-h-screen bg-background flex items-center justify-center px-6">
+      <div className="w-full max-w-sm bg-card border border-border p-8" style={{ borderRadius: '4px' }}>
         <div className="flex items-center gap-2 mb-8">
           <div className="w-8 h-8 bg-red-500 flex items-center justify-center" style={{ borderRadius: '4px' }}>
             <span className="text-black font-bold text-[10px]">PF</span>
           </div>
-          <span className="text-white font-semibold text-sm tracking-tight">Precision Finance</span>
+          <span className="text-foreground font-semibold text-sm tracking-tight">Precision Finance</span>
         </div>
 
         {/* ─── LOGIN ─── */}

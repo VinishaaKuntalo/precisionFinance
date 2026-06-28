@@ -1,31 +1,55 @@
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+// Allow runtime override of API URL via localStorage
+function getApiBase(): string {
+  const stored = localStorage.getItem('pf_api_url');
+  if (stored) return stored;
+  return import.meta.env.VITE_API_URL || 'http://localhost:3001';
+}
 
 function getToken() {
   return localStorage.getItem('pf_token');
 }
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${getToken() || ''}`,
-      ...options.headers,
-    },
-  });
+  const API_BASE = getApiBase();
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${getToken() || ''}`,
+        ...options.headers,
+      },
+    });
 
-  if (res.status === 401) {
-    localStorage.removeItem('pf_token');
-    window.location.reload();
-    throw new Error('Unauthorized');
+    if (res.status === 401) {
+      localStorage.removeItem('pf_token');
+      window.location.reload();
+      throw new Error('Unauthorized');
+    }
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+
+    return res.json();
+  } catch (err: any) {
+    if (err.name === 'TypeError' && err.message.includes('fetch')) {
+      throw new Error(
+        'Cannot connect to backend. Make sure the server is running, or set a custom API URL in Settings.'
+      );
+    }
+    throw err;
   }
+}
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `HTTP ${res.status}`);
-  }
+export function setApiUrl(url: string) {
+  localStorage.setItem('pf_api_url', url);
+  window.location.reload();
+}
 
-  return res.json();
+export function getApiUrl() {
+  return getApiBase();
 }
 
 export const authApi = {
